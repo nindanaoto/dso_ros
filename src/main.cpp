@@ -212,12 +212,15 @@ FullSystem* fullSystem = 0;
 Undistort* undistorter = 0;
 int frameID = 0;
 
-void vidCb(const sensor_msgs::ImageConstPtr img)
+void vidCb(const sensor_msgs::ImageConstPtr limg,const sensor_msgs::ImageConstPtr rimg)
 {
-	cv_bridge::CvImagePtr cv_ptr = cv_bridge::toCvCopy(img, sensor_msgs::image_encodings::MONO8);
-	assert(cv_ptr->image.type() == CV_8U);
-	assert(cv_ptr->image.channels() == 1);
+	cv_bridge::CvImagePtr lcv_ptr = cv_bridge::toCvCopy(limg, sensor_msgs::image_encodings::MONO8);
+	assert(lcv_ptr->image.type() == CV_8U);
+	assert(lcv_ptr->image.channels() == 1);
 
+	cv_bridge::CvImagePtr rcv_ptr = cv_bridge::toCvCopy(rimg, sensor_msgs::image_encodings::MONO8);
+	assert(rcv_ptr->image.type() == CV_8U);
+	assert(rcv_ptr->image.channels() == 1);
 
 	if(setting_fullResetRequested)
 	{
@@ -232,10 +235,14 @@ void vidCb(const sensor_msgs::ImageConstPtr img)
 		setting_fullResetRequested=false;
 	}
 
-	MinimalImageB minImg((int)cv_ptr->image.cols, (int)cv_ptr->image.rows,(unsigned char*)cv_ptr->image.data);
-	ImageAndExposure* undistImg = undistorter->undistort<unsigned char>(&minImg, 1,0, 1.0f);
-	undistImg->timestamp = img->header.stamp.toSec();
-	fullSystem->addActiveFrame(undistImg, frameID);
+	MinimalImageB lminImg((int)lcv_ptr->image.cols, (int)lcv_ptr->image.rows,(unsigned char*)lcv_ptr->image.data);
+	ImageAndExposure* undistImg_left = undistorter->undistort<unsigned char>(&lminImg, 1,0, 1.0f);
+	undistImg_right->timestamp = limg->header.stamp.toSec();
+
+	MinimalImageB rminImg((int)rcv_ptr->image.cols, (int)rcv_ptr->image.rows,(unsigned char*)rcv_ptr->image.data);
+	ImageAndExposure* undistImg_right = undistorter->undistort<unsigned char>(&rminImg, 1,0, 1.0f);
+	undistImg_right->timestamp = rimg->header.stamp.toSec();
+	fullSystem->addActiveFrame(undistImg_left, undistimg_right, frameID);
 	frameID++;
 	delete undistImg;
 
@@ -296,7 +303,12 @@ int main( int argc, char** argv )
     	fullSystem->setGammaFunction(undistorter->photometricUndist->getG());
 
     ros::NodeHandle nh;
-    ros::Subscriber imgSub = nh.subscribe("image", 1, &vidCb);
+	message_filters::Subscriber<sensor_msgs::Image> left_sub(nh, "/camera/infra1/image_rect_raw", 1);
+	message_filters::Subscriber<sensor_msgs::Image> right_sub(nh, "/camera/infra2/image_rect_raw", 1);
+	typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::Image, sensor_msgs::Image> sync_pol;
+	message_filters::Synchronizer<sync_pol> sync(sync_pol(10), left_sub,right_sub);
+	sync.registerCallback(boost::bind(&vidCb,_1,_2));
+	
     fullSystem->outputWrapper.push_back(new PosePublisher(nh));
     fullSystem->outputWrapper.push_back(new PointCloudPublisher(nh));
 
